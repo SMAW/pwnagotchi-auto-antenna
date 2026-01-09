@@ -239,16 +239,13 @@ class AutoAntenna(plugins.Plugin):
                 logging.info(f"[auto-antenna] Device MAC: {self.device_info['mac']}")
             
             # Get driver info
-            driver_result = subprocess.run(
-                ['basename', f'$(readlink /sys/class/net/{interface}/device/driver)'],
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-            if driver_result.returncode == 0:
-                self.device_info['driver'] = driver_result.stdout.strip()
+            try:
+                driver_link = os.readlink(f'/sys/class/net/{interface}/device/driver')
+                self.device_info['driver'] = os.path.basename(driver_link)
                 logging.info(f"[auto-antenna] Device Driver: {self.device_info['driver']}")
+            except Exception as e:
+                self.device_info['driver'] = 'Unknown'
+                logging.debug(f"[auto-antenna] Could not get driver info: {e}")
             
             # Get device name/model using ethtool
             ethtool_result = subprocess.run(
