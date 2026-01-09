@@ -5,29 +5,32 @@ import pwnagotchi.plugins as plugins
 import pwnagotchi.ui.fonts as fonts
 from pwnagotchi.ui.components import LabeledValue
 from pwnagotchi.ui.view import BLACK
-import json
+from flask import render_template_string, jsonify
+import time
 
 
 class AutoAntenna(plugins.Plugin):
-    __author__ = 'SMAW'
+    __author__ = 'SMAW / Terminatoror'
     __version__ = '1.1.0'
     __license__ = 'MIT'
-    __description__ = 'Automatically switches between internal and external WiFi adapters and displays current antenna on screen'
+    __description__ = 'Automatically switches between internal and external WiFi adapters with screen display and web interface'
 
     def __init__(self):
         self.current_antenna = "internal"
         self.previous_state = None
         self.switching = False
         self.device_info = {}
-        self.check_counter = 0
+        self.last_switch_time = None
+        self.switch_count = 0
 
     def on_loaded(self):
         logging.info("[auto-antenna] Plugin loaded")
-        # Check initial state and log device info
+        # Get initial device info and state
+        self._update_device_info()
         self.check_and_switch()
 
     def on_ui_setup(self, ui):
-        # Get config with defaults for 2.13" screen
+        # Get position and display config from options
         pos_x = self.options.get('position_x', 180)
         pos_y = self.options.get('position_y', 0)
         label_text = self.options.get('label', 'A')
@@ -42,9 +45,9 @@ class AutoAntenna(plugins.Plugin):
             text_font=fonts.Small))
 
     def on_ui_update(self, ui):
-        # Get custom text from config
-        int_text = self.options.get('text_internal', 'i')
-        ext_text = self.options.get('text_external', 'e')
+        # Get display values from config
+        int_text = self.options.get('internal_text', 'i')
+        ext_text = self.options.get('external_text', 'e')
         
         # Update the antenna display
         if self.current_antenna == "external":
@@ -55,25 +58,151 @@ class AutoAntenna(plugins.Plugin):
     def on_unload(self, ui):
         logging.info("[auto-antenna] Plugin unloaded")
 
-    def on_webhook(self, path, request):
-        """Web interface for antenna status"""
-        # Return JSON with antenna status and device info
-        response = {
-            'current_antenna': self.current_antenna,
-            'device_info': self.device_info,
-            'switching': self.switching
-        }
-        return json.dumps(response, indent=2)
-
     def on_epoch(self, agent, epoch, epoch_data):
-        # Check based on configured interval (default every 5 epochs)
-        check_interval = self.options.get('check_interval', 5)
-        self.check_counter += 1
+        # Check and switch adapters periodically
+        check_interval = self.options.get('check_interval', 1)
         
-        if self.check_counter >= check_interval:
-            self.check_counter = 0
-            if not self.switching:
-                self.check_and_switch()
+        if epoch % check_interval == 0 and not self.switching:
+            self.check_and_switch()
+
+    def on_webhook(self, path, request):
+        """Provide web interface for antenna status"""
+        
+        if path == "/" or not path:
+            # Main status page
+            html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Auto Antenna Status</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>
+                    body { 
+                        font-family: monospace; 
+                        margin: 20px; 
+                        background: #1a1a1a; 
+                        color: #00ff00;
+                    }
+                    .container { max-width: 800px; margin: 0 auto; }
+                    .status { 
+                        font-size: 24px; 
+                        margin: 20px 0; 
+                        padding: 20px; 
+                        background: #2a2a2a;
+                        border: 2px solid #00ff00;
+                        border-radius: 5px;
+                    }
+                    .info { 
+                        margin: 10px 0; 
+                        padding: 15px;
+                        background: #2a2a2a;
+                        border-left: 3px solid #00ff00;
+                    }
+                    .label { color: #00aaff; font-weight: bold; }
+                    .external { color: #ffaa00; }
+                    .internal { color: #00ff00; }
+                    h1 { color: #00ff00; }
+                    .refresh { margin: 20px 0; }
+                    button {
+                        background: #00ff00;
+                        color: #1a1a1a;
+                        border: none;
+                        padding: 10px 20px;
+                        font-family: monospace;
+                        font-size: 14px;
+                        cursor: pointer;
+                        border-radius: 3px;
+                    }
+                    button:hover { background: #00aa00; }
+                </style>
+                <script>
+                    function refreshData() {
+                        fetch('/plugins/auto_antenna/api')
+                            .then(r => r.json())
+                            .then(data => {
+                                document.getElementById('status').innerHTML = 
+                                    '<span class="' + data.antenna + '">' + 
+                                    data.antenna.toUpperCase() + '</span>';
+                                document.getElementById('device').textContent = data.device_name;
+                                document.getElementById('mac').textContent = data.mac_address;
+                                document.getElementById('driver').textContent = data.driver;
+                                document.getElementById('chipset').textContent = data.chipset;
+                                document.getElementById('switches').textContent = data.switch_count;
+                                document.getElementById('last_switch').textContent = data.last_switch;
+                            });
+                    }
+                    setInterval(refreshData, 5000);
+                </script>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>🔌 Auto Antenna Status</h1>
+                    
+                    <div class="status">
+                        <span class="label">Current Antenna:</span> 
+                        <span id="status" class="{{ antenna }}">{{ antenna|upper }}</span>
+                    </div>
+                    
+                    <div class="info">
+                        <span class="label">Device Name:</span> <span id="device">{{ device_name }}</span>
+                    </div>
+                    
+                    <div class="info">
+                        <span class="label">MAC Address:</span> <span id="mac">{{ mac_address }}</span>
+                    </div>
+                    
+                    <div class="info">
+                        <span class="label">Driver:</span> <span id="driver">{{ driver }}</span>
+                    </div>
+                    
+                    <div class="info">
+                        <span class="label">Chipset:</span> <span id="chipset">{{ chipset }}</span>
+                    </div>
+                    
+                    <div class="info">
+                        <span class="label">Total Switches:</span> <span id="switches">{{ switch_count }}</span>
+                    </div>
+                    
+                    <div class="info">
+                        <span class="label">Last Switch:</span> <span id="last_switch">{{ last_switch }}</span>
+                    </div>
+                    
+                    <div class="refresh">
+                        <button onclick="refreshData()">🔄 Refresh Now</button>
+                    </div>
+                    
+                    <p style="color: #666; font-size: 12px;">Auto-refreshes every 5 seconds</p>
+                </div>
+            </body>
+            </html>
+            """
+            
+            self._update_device_info()
+            
+            return render_template_string(html,
+                antenna=self.current_antenna,
+                device_name=self.device_info.get('name', 'Unknown'),
+                mac_address=self.device_info.get('mac', 'Unknown'),
+                driver=self.device_info.get('driver', 'Unknown'),
+                chipset=self.device_info.get('chipset', 'Unknown'),
+                switch_count=self.switch_count,
+                last_switch=self.last_switch_time if self.last_switch_time else 'Never'
+            )
+            
+        elif path == "api":
+            # JSON API endpoint
+            self._update_device_info()
+            
+            return jsonify({
+                'antenna': self.current_antenna,
+                'device_name': self.device_info.get('name', 'Unknown'),
+                'mac_address': self.device_info.get('mac', 'Unknown'),
+                'driver': self.device_info.get('driver', 'Unknown'),
+                'chipset': self.device_info.get('chipset', 'Unknown'),
+                'switch_count': self.switch_count,
+                'last_switch': self.last_switch_time if self.last_switch_time else 'Never',
+                'switching': self.switching
+            })
 
     def check_and_switch(self):
         """Check if wlan1 exists and switch if needed"""
@@ -84,90 +213,71 @@ class AutoAntenna(plugins.Plugin):
             # Determine current state
             if wlan1_exists and self.current_antenna != "external":
                 logging.info("[auto-antenna] External WiFi detected, switching...")
-                # Get device info before switching
-                self._log_device_info("wlan1")
                 self._switch_to_external()
-                self.current_antenna = "external"
                 
             elif not wlan1_exists and self.current_antenna == "external":
                 logging.info("[auto-antenna] External WiFi removed, reverting to internal...")
-                # Log internal device info
-                self._log_device_info("wlan0")
                 self._switch_to_internal()
-                self.current_antenna = "internal"
                 
         except Exception as e:
             logging.error(f"[auto-antenna] Error checking/switching: {e}")
 
-    def _log_device_info(self, interface):
-        """Log detailed device information"""
+    def _update_device_info(self):
+        """Get current WiFi device information"""
         try:
-            info = {}
+            interface = "wlan0"
             
             # Get MAC address
-            result = subprocess.run(
+            mac_result = subprocess.run(
                 ['cat', f'/sys/class/net/{interface}/address'],
                 capture_output=True,
                 text=True,
                 timeout=2
             )
-            if result.returncode == 0:
-                info['mac'] = result.stdout.strip()
-                logging.info(f"[auto-antenna] Device {interface} MAC: {info['mac']}")
+            if mac_result.returncode == 0:
+                self.device_info['mac'] = mac_result.stdout.strip()
+                logging.info(f"[auto-antenna] Device MAC: {self.device_info['mac']}")
             
-            # Get device name/driver
-            result = subprocess.run(
+            # Get driver info
+            driver_result = subprocess.run(
+                ['basename', f'$(readlink /sys/class/net/{interface}/device/driver)'],
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if driver_result.returncode == 0:
+                self.device_info['driver'] = driver_result.stdout.strip()
+                logging.info(f"[auto-antenna] Device Driver: {self.device_info['driver']}")
+            
+            # Get device name/model using ethtool
+            ethtool_result = subprocess.run(
                 ['ethtool', '-i', interface],
                 capture_output=True,
                 text=True,
                 timeout=2
             )
-            if result.returncode == 0:
-                for line in result.stdout.split('\n'):
-                    if 'driver:' in line:
-                        info['driver'] = line.split(':')[1].strip()
-                        logging.info(f"[auto-antenna] Device {interface} driver: {info['driver']}")
-                    elif 'bus-info:' in line:
-                        info['bus'] = line.split(':')[1].strip()
+            if ethtool_result.returncode == 0:
+                for line in ethtool_result.stdout.split('\n'):
+                    if 'bus-info' in line:
+                        self.device_info['name'] = line.split(':')[-1].strip()
+                        logging.info(f"[auto-antenna] Device Name: {self.device_info['name']}")
             
-            # Get chipset info from lsusb if it's USB
-            if 'usb' in info.get('bus', ''):
-                result = subprocess.run(
-                    ['lsusb'],
-                    capture_output=True,
-                    text=True,
-                    timeout=2
-                )
-                if result.returncode == 0:
-                    # Parse lsusb output for WiFi adapters
-                    for line in result.stdout.split('\n'):
-                        if any(keyword in line.lower() for keyword in ['wifi', 'wireless', '802.11', 'wlan', 'network']):
-                            info['chipset'] = line
-                            logging.info(f"[auto-antenna] Device {interface} chipset: {line.strip()}")
-                            break
-            
-            # Get interface info
-            result = subprocess.run(
-                ['iw', 'dev', interface, 'info'],
+            # Get chipset info using iw
+            iw_result = subprocess.run(
+                ['iw', interface, 'info'],
                 capture_output=True,
                 text=True,
                 timeout=2
             )
-            if result.returncode == 0:
-                for line in result.stdout.split('\n'):
-                    if 'type' in line:
-                        info['type'] = line.split()[1]
-                    elif 'wiphy' in line:
-                        info['wiphy'] = line.split()[1]
+            if iw_result.returncode == 0:
+                for line in iw_result.stdout.split('\n'):
+                    if 'wiphy' in line:
+                        self.device_info['chipset'] = line.split()[-1]
+                        logging.info(f"[auto-antenna] Device Chipset: {self.device_info['chipset']}")
                         
-                logging.info(f"[auto-antenna] Device {interface} type: {info.get('type', 'unknown')}")
-            
-            # Store device info
-            self.device_info[interface] = info
-            logging.info(f"[auto-antenna] Full device info for {interface}: {json.dumps(info, indent=2)}")
-            
         except Exception as e:
-            logging.error(f"[auto-antenna] Error logging device info for {interface}: {e}")
+            logging.error(f"[auto-antenna] Error getting device info: {e}")
 
     def _interface_exists(self, interface):
         """Check if a network interface exists"""
@@ -187,6 +297,8 @@ class AutoAntenna(plugins.Plugin):
         try:
             self.switching = True
             
+            logging.info("[auto-antenna] === SWITCHING TO EXTERNAL ADAPTER ===")
+            
             # Stop pwnagotchi service
             logging.info("[auto-antenna] Stopping pwnagotchi service...")
             subprocess.run(['systemctl', 'stop', 'pwnagotchi'], check=True, timeout=10)
@@ -205,19 +317,23 @@ class AutoAntenna(plugins.Plugin):
             # Keep onboard interface down
             subprocess.run(['ip', 'link', 'set', 'wlan_temp', 'down'], timeout=5)
             
+            # Update device info for new adapter
+            self._update_device_info()
+            
             # Start pwnagotchi service
             logging.info("[auto-antenna] Starting pwnagotchi service...")
             subprocess.run(['systemctl', 'start', 'pwnagotchi'], check=True, timeout=10)
             
-            logging.info("[auto-antenna] Switched to external WiFi successfully")
+            self.current_antenna = "external"
+            self.switch_count += 1
+            self.last_switch_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            logging.info("[auto-antenna] ✓ Switched to EXTERNAL WiFi successfully")
             
         except Exception as e:
-            logging.error(f"[auto-antenna] Error switching to external: {e}")
-            # Try to rollback
+            logging.error(f"[auto-antenna] ✗ Error switching to external: {e}")
+            # Try to recover
             try:
-                if self._interface_exists("wlan_temp"):
-                    subprocess.run(['ip', 'link', 'set', 'wlan_temp', 'name', 'wlan0'], timeout=5)
-                    subprocess.run(['ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
                 subprocess.run(['systemctl', 'start', 'pwnagotchi'], timeout=10)
             except:
                 pass
@@ -228,6 +344,8 @@ class AutoAntenna(plugins.Plugin):
         """Switch back to internal WiFi adapter"""
         try:
             self.switching = True
+            
+            logging.info("[auto-antenna] === SWITCHING TO INTERNAL ADAPTER ===")
             
             # Stop pwnagotchi service
             logging.info("[auto-antenna] Stopping pwnagotchi service...")
@@ -242,15 +360,22 @@ class AutoAntenna(plugins.Plugin):
                 subprocess.run(['ip', 'link', 'set', 'wlan_temp', 'name', 'wlan0'], check=True, timeout=5)
                 subprocess.run(['ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
             
+            # Update device info for onboard adapter
+            self._update_device_info()
+            
             # Start pwnagotchi service
             logging.info("[auto-antenna] Starting pwnagotchi service...")
             subprocess.run(['systemctl', 'start', 'pwnagotchi'], check=True, timeout=10)
             
-            logging.info("[auto-antenna] Reverted to internal WiFi successfully")
+            self.current_antenna = "internal"
+            self.switch_count += 1
+            self.last_switch_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            logging.info("[auto-antenna] ✓ Reverted to INTERNAL WiFi successfully")
             
         except Exception as e:
-            logging.error(f"[auto-antenna] Error switching to internal: {e}")
-            # Try to start service anyway
+            logging.error(f"[auto-antenna] ✗ Error switching to internal: {e}")
+            # Try to recover
             try:
                 subprocess.run(['systemctl', 'start', 'pwnagotchi'], timeout=10)
             except:
