@@ -227,6 +227,11 @@ class AutoAntenna(plugins.Plugin):
         try:
             interface = "wlan0"
             
+            # Validate interface name (alphanumeric only for security)
+            if not interface.replace('_', '').isalnum():
+                logging.error(f"[auto-antenna] Invalid interface name: {interface}")
+                return
+            
             # Get MAC address
             mac_result = subprocess.run(
                 ['cat', f'/sys/class/net/{interface}/address'],
