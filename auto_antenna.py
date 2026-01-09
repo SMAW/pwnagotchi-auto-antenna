@@ -226,16 +226,50 @@ class AutoAntenna(plugins.Plugin):
         try:
             # Check if wlan1 (external adapter) exists
             wlan1_exists = self._interface_exists("wlan1")
-
-            # Determine current state
+            
+            # If we think we are using internal, but wlan1 is plugged in -> switch to external
             if wlan1_exists and self.current_antenna != "external":
                 logging.info("[auto-antenna] External WiFi detected, switching...")
                 self._switch_to_external()
-
-            elif not wlan1_exists and self.current_antenna == "external":
-                logging.info("[auto-antenna] External WiFi removed, reverting to internal...")
-                self._switch_to_internal()
-
+                
+            # If we think we are using external, but wlan1 is gone -> revert to internal
+            # PROBLEM: When using external, we renamed wlan1 -> wlan0.
+            # So "wlan1" will NOT exist in the system, but we are technically using the external adapter (now called wlan0).
+            # We must detect if the card was physically removed.
+            
+            # If we are in "external" mode, the physical wlan1 is now wlan0.
+            # The physical internal wlan0 is now wlan_temp.
+            # So we check if wlan0 (the external card) still exists.
+            
+            elif self.current_antenna == "external":
+                # In external mode, wlan0 IS the external adapter.
+                # If wlan0 disappears, it means the stick was pulled.
+                # HOWEVER, wlan0 might just be down or resetting. 
+                # A better check: does the system see the USB device?
+                
+                # If wlan_temp exists (internal card parked), but wlan1 shows up again (maybe renamed back by OS?)
+                if wlan1_exists:
+                     # This shouldn't happen if we renamed it wlan0, unless a SECOND external card appeared?
+                     pass
+                
+                # Real check: If we are in external mode, we expect wlan_temp (internal) to exist.
+                # If wlan1 does NOT exist (because it's named wlan0), that is normal.
+                # We revert ONLY if the external device (wlan0) is gone.
+                
+                # Check if wlan0 (external) is still present
+                if not self._interface_exists("wlan0"):
+                     logging.info("[auto-antenna] Current external adapter (wlan0) vanished, reverting...")
+                     self._switch_to_internal()
+                
+            # Original logic was: elif not wlan1_exists and self.current_antenna == "external": switch_to_internal()
+            # This causes the loop because:
+            # 1. Switch enables external. External is now `wlan0`. `wlan1` is GONE.
+            # 2. Next check: `wlan1_exists` is False. `current_antenna` is "external".
+            # 3. Logic triggers: "External removed (wlan1 missing), revert!"
+            # 4. Reverts. External becomes `wlan1` again.
+            # 5. Next check: `wlan1_exists` is True. `current_antenna` is "internal".
+            # 6. Logic triggers: "External detected, switch!" -> Loop.
+            
         except Exception as e:
             logging.error(f"[auto-antenna] Error checking/switching: {e}")
 
@@ -342,6 +376,9 @@ class AutoAntenna(plugins.Plugin):
                 f.write("#!/bin/bash\n")
                 f.write("sleep 5\n")
                 f.write("systemctl stop pwnagotchi\n")
+                # Clean up monitor interfaces if they exist
+                f.write("iw dev wlan0mon del 2> /dev/null\n")
+                f.write("iw dev mon0 del 2> /dev/null\n")
                 f.write("ip link set wlan0 down\n")
                 f.write("ip link set wlan1 down\n")
                 f.write("ip link set wlan0 name wlan_temp\n")
@@ -400,6 +437,9 @@ class AutoAntenna(plugins.Plugin):
                 f.write("#!/bin/bash\n")
                 f.write("sleep 5\n")
                 f.write("systemctl stop pwnagotchi\n")
+                # Clean up monitor interfaces if they exist
+                f.write("iw dev wlan0mon del 2> /dev/null\n")
+                f.write("iw dev mon0 del 2> /dev/null\n")
                 f.write("ip link set wlan0 down\n")
                 f.write("if ip link show wlan_temp > /dev/null 2>&1; then\n")
                 f.write("  ip link set wlan_temp name wlan0\n")
