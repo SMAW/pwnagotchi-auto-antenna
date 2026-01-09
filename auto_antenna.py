@@ -37,6 +37,48 @@ class AutoAntenna(plugins.Plugin):
 
         # Get initial device info and state
         self._update_device_info()
+        
+        # MAC Address Verification Logic
+        mac_file = "/etc/pwnagotchi/internal_wifi_mac"
+        current_mac = self.device_info.get('mac', '')
+        
+        if not current_mac:
+            logging.warning("[auto-antenna] Could not retrieve current MAC address. Skipping MAC verification.")
+        else:
+            if os.path.exists(mac_file):
+                with open(mac_file, 'r') as f:
+                    stored_mac = f.read().strip()
+                
+                if current_mac.lower() != stored_mac.lower():
+                    logging.info(f"[auto-antenna] MAC mismatch! Current: {current_mac}, Stored Internal: {stored_mac}")
+                    logging.info("[auto-antenna] Assuming EXTERNAL adapter is active due to MAC mismatch.")
+                    self.current_antenna = "external"
+                else:
+                    logging.info(f"[auto-antenna] MAC match ({current_mac}). Confirmed INTERNAL adapter.")
+                    if self.current_antenna == "external" and not self._interface_exists("wlan_temp"):
+                         # This handles edge case where verified internal is active but state was confused
+                         self.current_antenna = "internal"
+
+            else:
+                # File doesn't exist. We need to determine if we should save this MAC.
+                # Use generic bus-info (not driver name) to guess if this is internal.
+                # Internal is usually 'mmc' or 'platform'. External is 'usb'.
+                bus_info = self.device_info.get('name', '').lower() # We stored bus-info in 'name'
+                
+                # Also check if we are already in 'external' mode detected by wlan_temp existence
+                if self.current_antenna == "external":
+                    logging.info("[auto-antenna] Plugin verified external mode. NOT saving this MAC as internal.")
+                elif 'usb' in bus_info:
+                    logging.info(f"[auto-antenna] Detected USB bus ({bus_info}). Assuming EXTERNAL adapter. NOT saving MAC.")
+                    self.current_antenna = "external" 
+                else:
+                    logging.info(f"[auto-antenna] No stored MAC. Detected internal-like bus ({bus_info}). Saving {current_mac} as INTERNAL MAC.")
+                    try:
+                        with open(mac_file, 'w') as f:
+                            f.write(current_mac)
+                    except Exception as e:
+                        logging.error(f"[auto-antenna] Failed to save internal MAC: {e}")
+        
         self.check_and_switch()
 
     def on_ui_setup(self, ui):
@@ -226,41 +268,41 @@ class AutoAntenna(plugins.Plugin):
         try:
             # Check if wlan1 (external adapter) exists
             wlan1_exists = self._interface_exists("wlan1")
-            
+
             # If we think we are using internal, but wlan1 is plugged in -> switch to external
             if wlan1_exists and self.current_antenna != "external":
                 logging.info("[auto-antenna] External WiFi detected, switching...")
                 self._switch_to_external()
-                
+
             # If we think we are using external, but wlan1 is gone -> revert to internal
             # PROBLEM: When using external, we renamed wlan1 -> wlan0.
             # So "wlan1" will NOT exist in the system, but we are technically using the external adapter (now called wlan0).
             # We must detect if the card was physically removed.
-            
+
             # If we are in "external" mode, the physical wlan1 is now wlan0.
             # The physical internal wlan0 is now wlan_temp.
             # So we check if wlan0 (the external card) still exists.
-            
+
             elif self.current_antenna == "external":
                 # In external mode, wlan0 IS the external adapter.
                 # If wlan0 disappears, it means the stick was pulled.
-                # HOWEVER, wlan0 might just be down or resetting. 
+                # HOWEVER, wlan0 might just be down or resetting.
                 # A better check: does the system see the USB device?
-                
+
                 # If wlan_temp exists (internal card parked), but wlan1 shows up again (maybe renamed back by OS?)
                 if wlan1_exists:
                      # This shouldn't happen if we renamed it wlan0, unless a SECOND external card appeared?
                      pass
-                
+
                 # Real check: If we are in external mode, we expect wlan_temp (internal) to exist.
                 # If wlan1 does NOT exist (because it's named wlan0), that is normal.
                 # We revert ONLY if the external device (wlan0) is gone.
-                
+
                 # Check if wlan0 (external) is still present
                 if not self._interface_exists("wlan0"):
                      logging.info("[auto-antenna] Current external adapter (wlan0) vanished, reverting...")
                      self._switch_to_internal()
-                
+
             # Original logic was: elif not wlan1_exists and self.current_antenna == "external": switch_to_internal()
             # This causes the loop because:
             # 1. Switch enables external. External is now `wlan0`. `wlan1` is GONE.
@@ -269,7 +311,7 @@ class AutoAntenna(plugins.Plugin):
             # 4. Reverts. External becomes `wlan1` again.
             # 5. Next check: `wlan1_exists` is True. `current_antenna` is "internal".
             # 6. Logic triggers: "External detected, switch!" -> Loop.
-            
+
         except Exception as e:
             logging.error(f"[auto-antenna] Error checking/switching: {e}")
 
@@ -443,6 +485,9 @@ class AutoAntenna(plugins.Plugin):
                 f.write("ip link set wlan0 down\n")
                 f.write("if ip link show wlan_temp > /dev/null 2>&1; then\n")
                 f.write("  ip link set wlan_temp name wlan0\n")
+                f.write("  ip link set wlan0 up\n")
+                f.write("elif ip link show wlan1 > /dev/null 2>&1; then\n")
+                f.write("  ip link set wlan1 name wlan0\n")
                 f.write("  ip link set wlan0 up\n")
                 f.write("fi\n")
                 f.write("systemctl start pwnagotchi\n")
