@@ -26,6 +26,10 @@ class AutoAntenna(plugins.Plugin):
     def on_loaded(self):
         logging.info("[auto-antenna] Plugin loaded")
 
+        self.dry_run = self.options.get('dry_run', False)
+        if self.dry_run:
+            logging.info("[auto-antenna] DRY RUN MODE ENABLED - No changes will be made")
+
         # Check if we are already in external mode (wlan_temp exists)
         if self._interface_exists("wlan_temp"):
              self.current_antenna = "external"
@@ -40,12 +44,16 @@ class AutoAntenna(plugins.Plugin):
         pos_x = self.options.get('position_x', 180)
         pos_y = self.options.get('position_y', 0)
         label_text = self.options.get('label', 'A')
+        
+        # Initial status text
+        status_text = f"{label_text}:i" if label_text else 'i'
 
         # Add antenna status to the UI
+        # Using empty label and combining text into value to keep them tight together
         ui.add_element('antenna', LabeledValue(
             color=BLACK,
-            label=f'{label_text}:' if label_text else '',
-            value='i',
+            label='', 
+            value=status_text,
             position=(pos_x, pos_y),
             label_font=fonts.Small,
             text_font=fonts.Small))
@@ -54,12 +62,15 @@ class AutoAntenna(plugins.Plugin):
         # Get display values from config
         int_text = self.options.get('internal_text', 'i')
         ext_text = self.options.get('external_text', 'e')
+        label_text = self.options.get('label', 'A')
+        
+        prefix = f"{label_text}:" if label_text else ""
 
         # Update the antenna display
         if self.current_antenna == "external":
-            ui.set('antenna', ext_text)
+            ui.set('antenna', f"{prefix}{ext_text}")
         else:
-            ui.set('antenna', int_text)
+            ui.set('antenna', f"{prefix}{int_text}")
 
     def on_unload(self, ui):
         logging.info("[auto-antenna] Plugin unloaded")
@@ -307,6 +318,20 @@ class AutoAntenna(plugins.Plugin):
 
             logging.info("[auto-antenna] === SWITCHING TO EXTERNAL ADAPTER ===")
 
+            if self.dry_run:
+                logging.info("[auto-antenna] [DRY RUN] Would stop pwnagotchi service")
+                logging.info("[auto-antenna] [DRY RUN] Would bring down wlan0 and wlan1")
+                logging.info("[auto-antenna] [DRY RUN] Would rename wlan0 to wlan_temp")
+                logging.info("[auto-antenna] [DRY RUN] Would rename wlan1 to wlan0 and bring up")
+                logging.info("[auto-antenna] [DRY RUN] Would keep wlan_temp down")
+                logging.info("[auto-antenna] [DRY RUN] Would update device info")
+                logging.info("[auto-antenna] [DRY RUN] Would start pwnagotchi service")
+                self.current_antenna = "external" # Simulate switch for display/logic
+                self.switch_count += 1
+                self.last_switch_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                logging.info("[auto-antenna] [DRY RUN] Simulated switch to EXTERNAL completd")
+                return
+
             # Stop pwnagotchi service
             logging.info("[auto-antenna] Stopping pwnagotchi service...")
             subprocess.run(['systemctl', 'stop', 'pwnagotchi'], check=True, timeout=10)
@@ -354,6 +379,18 @@ class AutoAntenna(plugins.Plugin):
             self.switching = True
 
             logging.info("[auto-antenna] === SWITCHING TO INTERNAL ADAPTER ===")
+
+            if self.dry_run:
+                logging.info("[auto-antenna] [DRY RUN] Would stop pwnagotchi service")
+                logging.info("[auto-antenna] [DRY RUN] Would bring down wlan0")
+                logging.info("[auto-antenna] [DRY RUN] Would rename wlan_temp to wlan0 and bring up")
+                logging.info("[auto-antenna] [DRY RUN] Would update device info")
+                logging.info("[auto-antenna] [DRY RUN] Would start pwnagotchi service")
+                self.current_antenna = "internal" # Simulate switch for display/logic
+                self.switch_count += 1
+                self.last_switch_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                logging.info("[auto-antenna] [DRY RUN] Simulated switch to INTERNAL completed")
+                return
 
             # Stop pwnagotchi service
             logging.info("[auto-antenna] Stopping pwnagotchi service...")

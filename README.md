@@ -29,15 +29,19 @@ It runs as a Pwnagotchi plugin and detects WiFi adapter changes in real time, re
    sudo cp auto_antenna.py /usr/local/share/pwnagotchi/custom-plugins/
    ```
 
-2. **Enable the plugin** in your configuration file (`/etc/pwnagotchi/config.toml`):
+2. **Enable the plugin** in your configuration file (`/etc/pwnagotchi/config.toml`).
+   Add the following lines at the end of the file:
+
    ```toml
-   main.plugins.auto_antenna.enabled = true
-   main.plugins.auto_antenna.check_interval = 1  # Check every N epochs
-   main.plugins.auto_antenna.position_x = 180    # UI position X
-   main.plugins.auto_antenna.position_y = 0      # UI position Y
-   main.plugins.auto_antenna.label = "A"         # UI label text
-   main.plugins.auto_antenna.internal_text = "i" # Display for internal
-   main.plugins.auto_antenna.external_text = "e" # Display for external
+   [main.plugins.auto_antenna]
+   enabled = true
+   check_interval = 1          # Check every N epochs
+   position_x = 180            # UI position X
+   position_y = 0              # UI position Y
+   label = "A"                 # UI label text
+   internal_text = "i"         # Display for internal
+   external_text = "e"         # Display for external
+   dry_run = false             # Log changes without applying them (set to true for testing)
    ```
 
 3. **Restart Pwnagotchi**:
