@@ -243,7 +243,7 @@ class AutoAntenna(plugins.Plugin):
                 driver_link = os.readlink(f'/sys/class/net/{interface}/device/driver')
                 self.device_info['driver'] = os.path.basename(driver_link)
                 logging.info(f"[auto-antenna] Device Driver: {self.device_info['driver']}")
-            except Exception as e:
+            except (OSError, FileNotFoundError) as e:
                 self.device_info['driver'] = 'Unknown'
                 logging.debug(f"[auto-antenna] Could not get driver info: {e}")
             
