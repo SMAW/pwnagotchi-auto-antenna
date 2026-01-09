@@ -40,7 +40,7 @@ class AutoAntenna(plugins.Plugin):
 
         # MAC Address Verification Logic
         mac_file = "/etc/pwnagotchi/internal_wifi_mac"
-        
+
         # --- NEW: If file doesn't exist, we MUST create it immediately if we suspect we are on internal
         # Otherwise the very first run on a fresh install will fail the check next time.
         if not os.path.exists(mac_file):
@@ -57,14 +57,14 @@ class AutoAntenna(plugins.Plugin):
 
         # Now proceed with verification
         current_mac = self.device_info.get('mac', '')
-        
+
         if not current_mac:
             logging.warning("[auto-antenna] Could not retrieve current MAC address. Skipping MAC verification.")
         else:
             if os.path.exists(mac_file):
                 with open(mac_file, 'r') as f:
                     stored_mac = f.read().strip()
-                
+
                 if current_mac.lower() != stored_mac.lower():
                     logging.info(f"[auto-antenna] MAC mismatch! Current: {current_mac}, Stored Internal: {stored_mac}")
                     logging.info("[auto-antenna] Assuming EXTERNAL adapter is active due to MAC mismatch.")
@@ -77,12 +77,12 @@ class AutoAntenna(plugins.Plugin):
 
             else:
                 # Fallback logic if file creation failed or edge case
-                bus_info = self.device_info.get('name', '').lower() 
+                bus_info = self.device_info.get('name', '').lower()
                 if self.current_antenna == "external":
-                    pass 
+                    pass
                 elif 'usb' in bus_info:
                     logging.info(f"[auto-antenna] Detected USB bus ({bus_info}). Assuming EXTERNAL adapter.")
-                    self.current_antenna = "external" 
+                    self.current_antenna = "external"
 
         pos_y = self.options.get('position_y', 0)
         label_text = self.options.get('label', 'A')
