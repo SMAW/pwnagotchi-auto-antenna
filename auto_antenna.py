@@ -227,6 +227,11 @@ class AutoAntenna(plugins.Plugin):
         try:
             interface = "wlan0"
             
+            # Validate interface name (alphanumeric only for security)
+            if not interface.replace('_', '').isalnum():
+                logging.error(f"[auto-antenna] Invalid interface name: {interface}")
+                return
+            
             # Get MAC address
             mac_result = subprocess.run(
                 ['cat', f'/sys/class/net/{interface}/address'],
@@ -238,17 +243,14 @@ class AutoAntenna(plugins.Plugin):
                 self.device_info['mac'] = mac_result.stdout.strip()
                 logging.info(f"[auto-antenna] Device MAC: {self.device_info['mac']}")
             
-            # Get driver info
-            driver_result = subprocess.run(
-                f'basename $(readlink /sys/class/net/{interface}/device/driver)',
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-            if driver_result.returncode == 0:
-                self.device_info['driver'] = driver_result.stdout.strip()
+            # Get driver info using os.path methods (safer than shell expansion)
+            try:
+                driver_path = os.readlink(f'/sys/class/net/{interface}/device/driver')
+                driver_name = os.path.basename(driver_path)
+                self.device_info['driver'] = driver_name
                 logging.info(f"[auto-antenna] Device Driver: {self.device_info['driver']}")
+            except (OSError, FileNotFoundError) as e:
+                logging.warning(f"[auto-antenna] Could not read driver info: {e}")
             
             # Get device name/model using ethtool
             ethtool_result = subprocess.run(
