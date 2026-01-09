@@ -240,7 +240,7 @@ class AutoAntenna(plugins.Plugin):
             
             # Get driver info
             driver_result = subprocess.run(
-                ['basename', f'$(readlink /sys/class/net/{interface}/device/driver)'],
+                f'basename $(readlink /sys/class/net/{interface}/device/driver)',
                 shell=True,
                 capture_output=True,
                 text=True,
