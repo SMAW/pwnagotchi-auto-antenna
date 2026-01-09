@@ -44,7 +44,7 @@ class AutoAntenna(plugins.Plugin):
         pos_x = self.options.get('position_x', 180)
         pos_y = self.options.get('position_y', 0)
         label_text = self.options.get('label', 'A')
-        
+
         # Initial status text
         status_text = f"{label_text}:i" if label_text else 'i'
 
@@ -52,7 +52,7 @@ class AutoAntenna(plugins.Plugin):
         # Using empty label and combining text into value to keep them tight together
         ui.add_element('antenna', LabeledValue(
             color=BLACK,
-            label='', 
+            label='',
             value=status_text,
             position=(pos_x, pos_y),
             label_font=fonts.Small,
@@ -63,7 +63,7 @@ class AutoAntenna(plugins.Plugin):
         int_text = self.options.get('internal_text', 'i')
         ext_text = self.options.get('external_text', 'e')
         label_text = self.options.get('label', 'A')
-        
+
         prefix = f"{label_text}:" if label_text else ""
 
         # Update the antenna display
