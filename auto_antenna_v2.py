@@ -56,23 +56,23 @@ class AutoAntenna(plugins.Plugin):
         """Check if wlan0 is the internal adapter"""
         current_mac = self._get_mac("wlan0")
         stored_mac = self._get_internal_mac()
-        
+
         if not current_mac:
             return True  # Assume internal if can't read
-        
+
         if not stored_mac:
             # First run - save current MAC as internal if no external present
             if not self._iface_exists("wlan1"):
                 self._save_internal_mac(current_mac)
                 return True
             return False  # External might be wlan0
-        
+
         return current_mac == stored_mac
 
     def _run_switch_script(self, to_external):
         """Execute interface switch in background"""
         script = "/tmp/auto_antenna_switch.sh"
-        
+
         if to_external:
             commands = """#!/bin/bash
 sleep 3
@@ -105,11 +105,11 @@ ip link set wlan0 up
 systemctl start pwnagotchi
 rm -- "$0"
 """
-        
+
         with open(script, 'w') as f:
             f.write(commands)
         os.chmod(script, 0o755)
-        
+
         # Run detached from service
         subprocess.Popen(
             ["systemd-run", "--scope", "--unit=auto-antenna", script],
@@ -120,7 +120,7 @@ rm -- "$0"
     def on_loaded(self):
         logging.info("[auto-antenna] Plugin loaded")
         self.dry_run = self.options.get('dry_run', False)
-        
+
         # Determine initial state
         if self._iface_exists("wlan_temp"):
             self.ready = True  # Already switched to external
@@ -150,7 +150,7 @@ rm -- "$0"
     def on_epoch(self, agent, epoch, epoch_data):
         if self.switching:
             return
-        
+
         interval = self.options.get('check_interval', 1)
         if epoch % interval != 0:
             return
@@ -188,7 +188,7 @@ rm -- "$0"
                 'switch_count': self.switch_count,
                 'last_switch': self.last_switch_time or 'Never'
             })
-        
+
         return render_template_string("""
 <!DOCTYPE html>
 <html>
@@ -208,5 +208,5 @@ rm -- "$0"
     <div class="box"><b>Last Switch:</b> {{ last }}</div>
 </body>
 </html>
-        """, ready=self.ready, mac=self._get_mac("wlan0"), count=self.switch_count, 
+        """, ready=self.ready, mac=self._get_mac("wlan0"), count=self.switch_count,
             last=self.last_switch_time or 'Never')
