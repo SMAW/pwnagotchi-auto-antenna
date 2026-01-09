@@ -332,44 +332,43 @@ class AutoAntenna(plugins.Plugin):
                 logging.info("[auto-antenna] [DRY RUN] Simulated switch to EXTERNAL completd")
                 return
 
-            # Stop pwnagotchi service
-            logging.info("[auto-antenna] Stopping pwnagotchi service...")
-            subprocess.run(['systemctl', 'stop', 'pwnagotchi'], check=True, timeout=10)
+            # Execute switch in a detached background process to avoid deadlock
+            # when stopping the pwnagotchi service from within itself.
+            logging.info("[auto-antenna] Spawning detached switch process...")
 
-            # Bring down both interfaces
-            subprocess.run(['ip', 'link', 'set', 'wlan0', 'down'], timeout=5)
-            subprocess.run(['ip', 'link', 'set', 'wlan1', 'down'], timeout=5)
+            # Create a temporary script for the switch operation
+            script_path = "/tmp/switch_to_external.sh"
+            with open(script_path, "w") as f:
+                f.write("#!/bin/bash\n")
+                f.write("sleep 5\n")
+                f.write("systemctl stop pwnagotchi\n")
+                f.write("ip link set wlan0 down\n")
+                f.write("ip link set wlan1 down\n")
+                f.write("ip link set wlan0 name wlan_temp\n")
+                f.write("ip link set wlan1 name wlan0\n")
+                f.write("ip link set wlan0 up\n")
+                f.write("ip link set wlan_temp down\n")
+                f.write("systemctl start pwnagotchi\n")
+                f.write("rm -- \"$0\"\n") # Self-delete
 
-            # Rename onboard wlan0 to wlan_temp
-            subprocess.run(['ip', 'link', 'set', 'wlan0', 'name', 'wlan_temp'], check=True, timeout=5)
+            os.chmod(script_path, 0o755)
 
-            # Rename external wlan1 to wlan0
-            subprocess.run(['ip', 'link', 'set', 'wlan1', 'name', 'wlan0'], check=True, timeout=5)
-            subprocess.run(['ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
-
-            # Keep onboard interface down
-            subprocess.run(['ip', 'link', 'set', 'wlan_temp', 'down'], timeout=5)
-
-            # Update device info for new adapter
-            self._update_device_info()
-
-            # Start pwnagotchi service
-            logging.info("[auto-antenna] Starting pwnagotchi service...")
-            subprocess.run(['systemctl', 'start', 'pwnagotchi'], check=True, timeout=10)
+            # Use data-independent execution to survive service restart
+            # If systemd-run is available, use it to create a transient scope
+            if os.path.exists("/bin/systemd-run") or os.path.exists("/usr/bin/systemd-run"):
+                 subprocess.run(["systemd-run", "--unit=auto-antenna-switch", "--scope", script_path], check=False)
+            else:
+                 # Fallback to nohup if systemd-run is missing
+                 subprocess.Popen(f"nohup {script_path} > /dev/null 2>&1 &", shell=True)
 
             self.current_antenna = "external"
             self.switch_count += 1
             self.last_switch_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
-            logging.info("[auto-antenna] ✓ Switched to EXTERNAL WiFi successfully")
+            logging.info("[auto-antenna] ✓ Initiated switch to EXTERNAL WiFi (service will restart)")
 
         except Exception as e:
-            logging.error(f"[auto-antenna] ✗ Error switching to external: {e}")
-            # Try to recover
-            try:
-                subprocess.run(['systemctl', 'start', 'pwnagotchi'], timeout=10)
-            except:
-                pass
+            logging.error(f"[auto-antenna] ✗ Error initiating switch to external: {e}")
         finally:
             self.switching = False
 
@@ -392,38 +391,39 @@ class AutoAntenna(plugins.Plugin):
                 logging.info("[auto-antenna] [DRY RUN] Simulated switch to INTERNAL completed")
                 return
 
-            # Stop pwnagotchi service
-            logging.info("[auto-antenna] Stopping pwnagotchi service...")
-            subprocess.run(['systemctl', 'stop', 'pwnagotchi'], check=True, timeout=10)
+            # Execute switch in a detached background process to avoid deadlock
+            logging.info("[auto-antenna] Spawning detached switch process...")
 
-            # Bring down wlan0 (external adapter) if it exists
-            if self._interface_exists("wlan0"):
-                subprocess.run(['ip', 'link', 'set', 'wlan0', 'down'], timeout=5)
+            # Create a temporary script for the switch operation
+            script_path = "/tmp/switch_to_internal.sh"
+            with open(script_path, "w") as f:
+                f.write("#!/bin/bash\n")
+                f.write("sleep 5\n")
+                f.write("systemctl stop pwnagotchi\n")
+                f.write("ip link set wlan0 down\n")
+                f.write("if ip link show wlan_temp > /dev/null 2>&1; then\n")
+                f.write("  ip link set wlan_temp name wlan0\n")
+                f.write("  ip link set wlan0 up\n")
+                f.write("fi\n")
+                f.write("systemctl start pwnagotchi\n")
+                f.write("rm -- \"$0\"\n") # Self-delete
 
-            # Rename wlan_temp back to wlan0 if it exists
-            if self._interface_exists("wlan_temp"):
-                subprocess.run(['ip', 'link', 'set', 'wlan_temp', 'name', 'wlan0'], check=True, timeout=5)
-                subprocess.run(['ip', 'link', 'set', 'wlan0', 'up'], timeout=5)
+            os.chmod(script_path, 0o755)
 
-            # Update device info for onboard adapter
-            self._update_device_info()
-
-            # Start pwnagotchi service
-            logging.info("[auto-antenna] Starting pwnagotchi service...")
-            subprocess.run(['systemctl', 'start', 'pwnagotchi'], check=True, timeout=10)
+             # Use data-independent execution to survive service restart
+            if os.path.exists("/bin/systemd-run") or os.path.exists("/usr/bin/systemd-run"):
+                 subprocess.run(["systemd-run", "--unit=auto-antenna-internal", "--scope", script_path], check=False)
+            else:
+                 subprocess.Popen(f"nohup {script_path} > /dev/null 2>&1 &", shell=True)
 
             self.current_antenna = "internal"
             self.switch_count += 1
             self.last_switch_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
-            logging.info("[auto-antenna] ✓ Reverted to INTERNAL WiFi successfully")
+            logging.info("[auto-antenna] ✓ Initiated revert to INTERNAL WiFi (service will restart)")
 
         except Exception as e:
-            logging.error(f"[auto-antenna] ✗ Error switching to internal: {e}")
-            # Try to recover
-            try:
-                subprocess.run(['systemctl', 'start', 'pwnagotchi'], timeout=10)
-            except:
-                pass
+            logging.error(f"[auto-antenna] ✗ Error initiating switch to internal: {e}")
         finally:
+            self.switching = False
             self.switching = False
