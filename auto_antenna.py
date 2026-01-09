@@ -25,6 +25,12 @@ class AutoAntenna(plugins.Plugin):
 
     def on_loaded(self):
         logging.info("[auto-antenna] Plugin loaded")
+        
+        # Check if we are already in external mode (wlan_temp exists)
+        if self._interface_exists("wlan_temp"):
+             self.current_antenna = "external"
+             logging.info("[auto-antenna] Detected existing external adapter configuration (wlan_temp exists)")
+
         # Get initial device info and state
         self._update_device_info()
         self.check_and_switch()
