@@ -37,18 +37,18 @@ class AutoAntenna(plugins.Plugin):
 
         # Get initial device info and state
         self._update_device_info()
-        
+
         # MAC Address Verification Logic
         mac_file = "/etc/pwnagotchi/internal_wifi_mac"
         current_mac = self.device_info.get('mac', '')
-        
+
         if not current_mac:
             logging.warning("[auto-antenna] Could not retrieve current MAC address. Skipping MAC verification.")
         else:
             if os.path.exists(mac_file):
                 with open(mac_file, 'r') as f:
                     stored_mac = f.read().strip()
-                
+
                 if current_mac.lower() != stored_mac.lower():
                     logging.info(f"[auto-antenna] MAC mismatch! Current: {current_mac}, Stored Internal: {stored_mac}")
                     logging.info("[auto-antenna] Assuming EXTERNAL adapter is active due to MAC mismatch.")
@@ -64,13 +64,13 @@ class AutoAntenna(plugins.Plugin):
                 # Use generic bus-info (not driver name) to guess if this is internal.
                 # Internal is usually 'mmc' or 'platform'. External is 'usb'.
                 bus_info = self.device_info.get('name', '').lower() # We stored bus-info in 'name'
-                
+
                 # Also check if we are already in 'external' mode detected by wlan_temp existence
                 if self.current_antenna == "external":
                     logging.info("[auto-antenna] Plugin verified external mode. NOT saving this MAC as internal.")
                 elif 'usb' in bus_info:
                     logging.info(f"[auto-antenna] Detected USB bus ({bus_info}). Assuming EXTERNAL adapter. NOT saving MAC.")
-                    self.current_antenna = "external" 
+                    self.current_antenna = "external"
                 else:
                     logging.info(f"[auto-antenna] No stored MAC. Detected internal-like bus ({bus_info}). Saving {current_mac} as INTERNAL MAC.")
                     try:
@@ -78,7 +78,7 @@ class AutoAntenna(plugins.Plugin):
                             f.write(current_mac)
                     except Exception as e:
                         logging.error(f"[auto-antenna] Failed to save internal MAC: {e}")
-        
+
         self.check_and_switch()
 
     def on_ui_setup(self, ui):
