@@ -1,5 +1,6 @@
 import logging
 import os
+import subprocess
 import pwnagotchi.plugins as plugins
 import pwnagotchi.ui.fonts as fonts
 from pwnagotchi.ui.components import LabeledValue
@@ -7,6 +8,8 @@ from pwnagotchi.ui.view import BLACK
 from flask import render_template_string, jsonify
 
 MAC_FILE = "/etc/pwnagotchi/internal_wifi_mac"
+BOOT_CONFIG = "/boot/firmware/config.txt"
+DISABLE_WIFI_OVERLAY = "dtoverlay=disable-wifi"
 
 # Raspberry Pi Foundation MAC address prefixes (OUI)
 RPI_MAC_PREFIXES = (
@@ -20,14 +23,16 @@ RPI_MAC_PREFIXES = (
 
 class AutoAntenna(plugins.Plugin):
     __author__ = 'SMAW / Terminatoror'
-    __version__ = '0.1.0'
+    __version__ = '0.2.0'
     __license__ = 'MIT'
-    __description__ = 'Shows which WiFi antenna and band is currently in use'
+    __description__ = 'Auto-switches WiFi antenna via boot config and displays status'
 
     def __init__(self):
         self.is_external = False
         self.mac_warning = None  # Warning message if stored MAC looks wrong
         self.config_warning = None  # Warning if pwnagotchi config doesn't match
+        self.switching = False  # Reboot in progress
+        self.internal_disabled = False  # Is internal WiFi disabled in boot config
 
     def _is_rpi_mac(self, mac):
         """Check if MAC address belongs to Raspberry Pi"""
@@ -128,6 +133,86 @@ class AutoAntenna(plugins.Plugin):
             pass
         return '?'
 
+    def _is_internal_wifi_disabled(self):
+        """Check if internal WiFi is disabled in boot config"""
+        try:
+            if os.path.exists(BOOT_CONFIG):
+                with open(BOOT_CONFIG, 'r') as f:
+                    content = f.read()
+                # Check for uncommented disable-wifi overlay
+                for line in content.split('\n'):
+                    line = line.strip()
+                    if line == DISABLE_WIFI_OVERLAY:
+                        return True
+        except Exception as e:
+            logging.error(f"[auto-antenna] Failed to read boot config: {e}")
+        return False
+
+    def _set_internal_wifi_disabled(self, disabled):
+        """Enable or disable internal WiFi in boot config"""
+        try:
+            if not os.path.exists(BOOT_CONFIG):
+                logging.error(f"[auto-antenna] Boot config not found: {BOOT_CONFIG}")
+                return False
+
+            with open(BOOT_CONFIG, 'r') as f:
+                lines = f.readlines()
+
+            new_lines = []
+            found = False
+
+            for line in lines:
+                stripped = line.strip()
+                # Skip existing disable-wifi lines (commented or not)
+                if 'disable-wifi' in stripped:
+                    found = True
+                    continue
+                new_lines.append(line)
+
+            # Add the overlay if we want to disable
+            if disabled:
+                new_lines.append(f"\n{DISABLE_WIFI_OVERLAY}\n")
+
+            with open(BOOT_CONFIG, 'w') as f:
+                f.writelines(new_lines)
+
+            action = "disabled" if disabled else "enabled"
+            logging.info(f"[auto-antenna] Internal WiFi {action} in boot config")
+            return True
+
+        except Exception as e:
+            logging.error(f"[auto-antenna] Failed to modify boot config: {e}")
+            return False
+
+    def _reboot(self):
+        """Reboot the device"""
+        logging.info("[auto-antenna] Rebooting device...")
+        self.switching = True
+        try:
+            # Use systemd-run to detach from current process
+            subprocess.Popen(
+                ['systemd-run', '--scope', 'sh', '-c', 'sleep 2 && reboot'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception as e:
+            logging.error(f"[auto-antenna] Reboot failed: {e}")
+            self.switching = False
+
+    def _switch_to_external(self):
+        """Switch to external antenna by disabling internal WiFi and rebooting"""
+        if self.options.get('auto_switch', False) and not self.switching:
+            logging.info("[auto-antenna] Switching to EXTERNAL antenna...")
+            if self._set_internal_wifi_disabled(True):
+                self._reboot()
+
+    def _switch_to_internal(self):
+        """Switch to internal antenna by enabling internal WiFi and rebooting"""
+        if self.options.get('auto_switch', False) and not self.switching:
+            logging.info("[auto-antenna] Switching to INTERNAL antenna...")
+            if self._set_internal_wifi_disabled(False):
+                self._reboot()
+
     def _detect_antenna(self):
         """Detect if using internal or external antenna"""
         # Find the active interface (wlan0 or wlan0mon)
@@ -175,10 +260,13 @@ class AutoAntenna(plugins.Plugin):
         return True
 
     def on_loaded(self):
-        logging.info("[auto-antenna] Plugin loaded")
+        logging.info("[auto-antenna] Plugin loaded (v0.2.0)")
+        self.internal_disabled = self._is_internal_wifi_disabled()
         self._detect_antenna()
         status = "EXTERNAL" if self.is_external else "INTERNAL"
         logging.info(f"[auto-antenna] Detected: {status} adapter")
+        logging.info(f"[auto-antenna] Internal WiFi disabled in boot: {self.internal_disabled}")
+        logging.info(f"[auto-antenna] Auto-switch enabled: {self.options.get('auto_switch', False)}")
 
     def on_ui_setup(self, ui):
         pos = (self.options.get('position_x', 180), self.options.get('position_y', 0))
@@ -188,13 +276,18 @@ class AutoAntenna(plugins.Plugin):
         ))
 
     def on_ui_update(self, ui):
+        # Show reboot message if switching
+        if self.switching:
+            ui.set('antenna', 'REBOOTING...')
+            return
+
         # Show warning if MAC looks wrong (highest priority)
         if self.mac_warning:
             ui.set('antenna', self.mac_warning)
             return
 
-        # Show config warning if external available but not used
-        if self.config_warning:
+        # Show config warning if external available but not used (only if auto_switch disabled)
+        if self.config_warning and not self.options.get('auto_switch', False):
             ui.set('antenna', self.config_warning)
             return
 
@@ -218,6 +311,20 @@ class AutoAntenna(plugins.Plugin):
             self._detect_antenna()
             self._check_pwnagotchi_config(agent)
 
+            # Auto-switch logic (only if enabled)
+            if self.options.get('auto_switch', False) and not self.switching:
+                external_plugged = self._iface_exists('wlan1')
+
+                # External plugged in but internal WiFi still enabled -> switch to external
+                if external_plugged and not self.internal_disabled:
+                    logging.info("[auto-antenna] External adapter detected, switching...")
+                    self._switch_to_external()
+
+                # No external but internal WiFi is disabled -> switch back to internal
+                elif not external_plugged and self.internal_disabled:
+                    logging.info("[auto-antenna] External adapter removed, switching back...")
+                    self._switch_to_internal()
+
     def on_webhook(self, path, request):
         iface = 'wlan0mon' if self._iface_exists('wlan0mon') else 'wlan0'
         base_iface = iface.replace('mon', '')
@@ -227,11 +334,31 @@ class AutoAntenna(plugins.Plugin):
             'interface': iface,
             'mac': self._get_mac(base_iface),
             'driver': self._get_driver(base_iface),
-            'band': self._get_band()
+            'band': self._get_band(),
+            'internal_disabled': self.internal_disabled,
+            'auto_switch': self.options.get('auto_switch', False),
+            'switching': self.switching,
+            'external_available': self._iface_exists('wlan1')
         }
 
+        # API endpoint
         if path == "api" or path == "/api":
             return jsonify(info)
+
+        # Manual switch endpoints
+        if path == "switch/external" or path == "/switch/external":
+            if not self.switching:
+                self._set_internal_wifi_disabled(True)
+                self._reboot()
+                return jsonify({'status': 'rebooting', 'target': 'external'})
+            return jsonify({'status': 'already_switching'})
+
+        if path == "switch/internal" or path == "/switch/internal":
+            if not self.switching:
+                self._set_internal_wifi_disabled(False)
+                self._reboot()
+                return jsonify({'status': 'rebooting', 'target': 'internal'})
+            return jsonify({'status': 'already_switching'})
 
         return render_template_string("""
 <!DOCTYPE html>
@@ -243,12 +370,18 @@ class AutoAntenna(plugins.Plugin):
         .box { background: #2a2a2a; padding: 15px; margin: 10px 0; border-left: 3px solid #0f0; }
         .external { color: #fa0; }
         .internal { color: #0f0; }
+        .warn { color: #f55; }
         h1 { color: #0f0; }
         b { color: #888; }
+        button { background: #333; color: #0f0; border: 1px solid #0f0; padding: 10px 20px;
+                 cursor: pointer; font-family: monospace; margin: 5px; }
+        button:hover { background: #0f0; color: #000; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .status { margin-top: 20px; padding: 10px; }
     </style>
 </head>
 <body>
-    <h1>📡 Auto Antenna v0.1</h1>
+    <h1>📡 Auto Antenna v0.2</h1>
     <div class="box">
         <b>Antenna:</b> <span class="{{ 'external' if is_external else 'internal' }}">{{ 'EXTERNAL' if is_external else 'INTERNAL' }}</span>
     </div>
@@ -256,7 +389,43 @@ class AutoAntenna(plugins.Plugin):
     <div class="box"><b>MAC:</b> {{ mac or 'N/A' }}</div>
     <div class="box"><b>Driver:</b> {{ driver or 'N/A' }}</div>
     <div class="box"><b>Band:</b> {{ band }} GHz</div>
+    <div class="box">
+        <b>Internal WiFi:</b> <span class="{{ 'warn' if internal_disabled else 'internal' }}">{{ 'DISABLED' if internal_disabled else 'ENABLED' }}</span>
+    </div>
+    <div class="box">
+        <b>Auto-Switch:</b> {{ 'ON' if auto_switch else 'OFF' }}
+        {% if external_available and not internal_disabled %}
+        <br><small class="warn">⚠ External adapter available (wlan1)</small>
+        {% endif %}
+    </div>
+
+    <div class="status">
+        <b>Manual Switch:</b><br>
+        <button onclick="switchTo('external')" {% if switching or internal_disabled %}disabled{% endif %}>
+            Use External (reboot)
+        </button>
+        <button onclick="switchTo('internal')" {% if switching or not internal_disabled %}disabled{% endif %}>
+            Use Internal (reboot)
+        </button>
+        <div id="result"></div>
+    </div>
+
+    <script>
+    function switchTo(target) {
+        if (!confirm('This will reboot the device. Continue?')) return;
+        fetch('/plugins/auto_antenna/switch/' + target)
+            .then(r => r.json())
+            .then(d => {
+                document.getElementById('result').innerHTML =
+                    '<br><span class="warn">⚡ ' + d.status.toUpperCase() + ' - Device will reboot...</span>';
+            });
+    }
+    </script>
 </body>
 </html>
         """, is_external=self.is_external, iface=iface,
-            mac=info['mac'], driver=info['driver'], band=info['band'])
+            mac=info['mac'], driver=info['driver'], band=info['band'],
+            internal_disabled=self.internal_disabled,
+            auto_switch=self.options.get('auto_switch', False),
+            switching=self.switching,
+            external_available=info['external_available'])
