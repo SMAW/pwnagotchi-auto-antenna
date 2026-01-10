@@ -8,6 +8,15 @@ from flask import render_template_string, jsonify
 
 MAC_FILE = "/etc/pwnagotchi/internal_wifi_mac"
 
+# Raspberry Pi Foundation MAC address prefixes (OUI)
+RPI_MAC_PREFIXES = (
+    'b8:27:eb',  # RPi older models
+    'dc:a6:32',  # RPi 4
+    'e4:5f:01',  # RPi 4
+    'd8:3a:dd',  # RPi newer
+    '2c:cf:67',  # RPi 5
+)
+
 
 class AutoAntenna(plugins.Plugin):
     __author__ = 'SMAW / Terminatoror'
@@ -17,6 +26,13 @@ class AutoAntenna(plugins.Plugin):
 
     def __init__(self):
         self.is_external = False
+        self.mac_warning = None  # Warning message if stored MAC looks wrong
+
+    def _is_rpi_mac(self, mac):
+        """Check if MAC address belongs to Raspberry Pi"""
+        if not mac:
+            return False
+        return mac.lower().startswith(RPI_MAC_PREFIXES)
 
     def _get_mac(self, iface):
         """Get MAC address of an interface"""
@@ -45,7 +61,7 @@ class AutoAntenna(plugins.Plugin):
         try:
             # Check wlan0mon first, then wlan0
             iface = 'wlan0mon' if self._iface_exists('wlan0mon') else 'wlan0'
-            
+
             # Try to get frequency from iw
             import subprocess
             result = subprocess.run(
@@ -78,29 +94,45 @@ class AutoAntenna(plugins.Plugin):
         # Find the active interface (wlan0 or wlan0mon)
         iface = 'wlan0mon' if self._iface_exists('wlan0mon') else 'wlan0'
         base_iface = iface.replace('mon', '')
-        
+
         if not self._iface_exists(base_iface):
             return False
-        
+
         current_mac = self._get_mac(base_iface)
-        
+
         # Check stored internal MAC
         if os.path.exists(MAC_FILE):
             with open(MAC_FILE, 'r') as f:
                 stored_mac = f.read().strip().lower()
+
+            # Validate stored MAC is actually a Raspberry Pi MAC
+            if not self._is_rpi_mac(stored_mac):
+                self.mac_warning = "WARN:stored MAC not RPi!"
+                logging.warning(f"[auto-antenna] Stored MAC {stored_mac} is NOT a Raspberry Pi MAC!")
+                logging.warning("[auto-antenna] Delete /etc/pwnagotchi/internal_wifi_mac and restart without external adapter")
+            else:
+                self.mac_warning = None
+
             self.is_external = (current_mac != stored_mac)
         else:
             # First run - save current MAC as internal (assuming no external on first boot)
             if current_mac:
-                try:
-                    os.makedirs(os.path.dirname(MAC_FILE), exist_ok=True)
-                    with open(MAC_FILE, 'w') as f:
-                        f.write(current_mac)
-                    logging.info(f"[auto-antenna] Saved internal MAC: {current_mac}")
-                except Exception as e:
-                    logging.error(f"[auto-antenna] Failed to save MAC: {e}")
+                # Check if current MAC is actually a Raspberry Pi MAC
+                if not self._is_rpi_mac(current_mac):
+                    self.mac_warning = "WARN:ext on 1st boot?"
+                    logging.warning(f"[auto-antenna] Current MAC {current_mac} is NOT a Raspberry Pi MAC!")
+                    logging.warning("[auto-antenna] External adapter may be connected - remove it and restart")
+                else:
+                    self.mac_warning = None
+                    try:
+                        os.makedirs(os.path.dirname(MAC_FILE), exist_ok=True)
+                        with open(MAC_FILE, 'w') as f:
+                            f.write(current_mac)
+                        logging.info(f"[auto-antenna] Saved internal MAC: {current_mac}")
+                    except Exception as e:
+                        logging.error(f"[auto-antenna] Failed to save MAC: {e}")
             self.is_external = False
-        
+
         return True
 
     def on_loaded(self):
@@ -117,14 +149,19 @@ class AutoAntenna(plugins.Plugin):
         ))
 
     def on_ui_update(self, ui):
+        # Show warning if MAC looks wrong
+        if self.mac_warning:
+            ui.set('antenna', self.mac_warning)
+            return
+
         label = self.options.get('label', 'A')
         band = self._get_band()
-        
+
         if self.is_external:
             status = self.options.get('external_text', 'e')
         else:
             status = self.options.get('internal_text', 'i')
-        
+
         ui.set('antenna', f"{label}:{status}{band}")
 
     def on_unload(self, ui):
@@ -139,7 +176,7 @@ class AutoAntenna(plugins.Plugin):
     def on_webhook(self, path, request):
         iface = 'wlan0mon' if self._iface_exists('wlan0mon') else 'wlan0'
         base_iface = iface.replace('mon', '')
-        
+
         info = {
             'antenna': 'external' if self.is_external else 'internal',
             'interface': iface,
@@ -147,7 +184,7 @@ class AutoAntenna(plugins.Plugin):
             'driver': self._get_driver(base_iface),
             'band': self._get_band()
         }
-        
+
         if path == "api" or path == "/api":
             return jsonify(info)
 
@@ -176,5 +213,5 @@ class AutoAntenna(plugins.Plugin):
     <div class="box"><b>Band:</b> {{ band }} GHz</div>
 </body>
 </html>
-        """, is_external=self.is_external, iface=iface, 
+        """, is_external=self.is_external, iface=iface,
             mac=info['mac'], driver=info['driver'], band=info['band'])
