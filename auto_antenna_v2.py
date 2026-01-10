@@ -180,11 +180,48 @@ rm -- "$0"
             self.last_switch_time = time.strftime("%Y-%m-%d %H:%M:%S")
             self.switching = False
 
+    def _get_iface_info(self, iface):
+        """Get interface info: MAC, driver, device name"""
+        info = {'name': iface, 'exists': self._iface_exists(iface), 'mac': None, 'driver': None, 'device': None}
+        if not info['exists']:
+            return info
+        
+        info['mac'] = self._get_mac(iface)
+        
+        # Get driver
+        try:
+            driver_path = f'/sys/class/net/{iface}/device/driver'
+            if os.path.exists(driver_path):
+                info['driver'] = os.path.basename(os.readlink(driver_path))
+        except:
+            pass
+        
+        # Get device name from uevent
+        try:
+            uevent_path = f'/sys/class/net/{iface}/device/uevent'
+            if os.path.exists(uevent_path):
+                with open(uevent_path, 'r') as f:
+                    for line in f:
+                        if line.startswith('PRODUCT=') or line.startswith('PCI_ID='):
+                            info['device'] = line.split('=')[1].strip()
+                            break
+        except:
+            pass
+        
+        return info
+
     def on_webhook(self, path, request):
+        # Gather interface info
+        interfaces = []
+        for iface in ['wlan0', 'wlan1', 'wlan_temp', 'wlan0mon']:
+            info = self._get_iface_info(iface)
+            if info['exists']:
+                interfaces.append(info)
+        
         if path == "api" or path == "/api":
             return jsonify({
                 'antenna': 'external' if self.ready else 'internal',
-                'mac': self._get_mac("wlan0"),
+                'interfaces': interfaces,
                 'switch_count': self.switch_count,
                 'last_switch': self.last_switch_time or 'Never'
             })
@@ -197,16 +234,37 @@ rm -- "$0"
     <style>
         body { font-family: monospace; background: #1a1a1a; color: #0f0; padding: 20px; }
         .box { background: #2a2a2a; padding: 15px; margin: 10px 0; border-left: 3px solid #0f0; }
+        .iface { border-left-color: #0af; }
+        .external { color: #fa0; }
+        .internal { color: #0f0; }
         h1 { color: #0f0; }
+        h2 { color: #0af; margin-top: 20px; }
+        table { width: 100%; border-collapse: collapse; }
+        td { padding: 5px 10px; }
+        td:first-child { color: #888; width: 80px; }
     </style>
 </head>
 <body>
     <h1>📡 Auto Antenna</h1>
-    <div class="box"><b>Status:</b> {{ 'EXTERNAL' if ready else 'INTERNAL' }}</div>
-    <div class="box"><b>MAC:</b> {{ mac }}</div>
-    <div class="box"><b>Switches:</b> {{ count }}</div>
-    <div class="box"><b>Last Switch:</b> {{ last }}</div>
+    <div class="box">
+        <b>Status:</b> <span class="{{ 'external' if ready else 'internal' }}">{{ 'EXTERNAL' if ready else 'INTERNAL' }}</span>
+    </div>
+    <div class="box"><b>Switches:</b> {{ count }} | <b>Last:</b> {{ last }}</div>
+    
+    <h2>🔌 Interfaces</h2>
+    {% for iface in interfaces %}
+    <div class="box iface">
+        <table>
+            <tr><td>Name:</td><td><b>{{ iface.name }}</b></td></tr>
+            <tr><td>MAC:</td><td>{{ iface.mac or 'N/A' }}</td></tr>
+            <tr><td>Driver:</td><td>{{ iface.driver or 'N/A' }}</td></tr>
+            <tr><td>Device:</td><td>{{ iface.device or 'N/A' }}</td></tr>
+        </table>
+    </div>
+    {% endfor %}
+    
+    <p style="color:#666; margin-top:20px; font-size:12px;">Refresh page to update</p>
 </body>
 </html>
-        """, ready=self.ready, mac=self._get_mac("wlan0"), count=self.switch_count,
+        """, ready=self.ready, interfaces=interfaces, count=self.switch_count, 
             last=self.last_switch_time or 'Never')
