@@ -27,6 +27,7 @@ class AutoAntenna(plugins.Plugin):
     def __init__(self):
         self.is_external = False
         self.mac_warning = None  # Warning message if stored MAC looks wrong
+        self.config_warning = None  # Warning if pwnagotchi config doesn't match
 
     def _is_rpi_mac(self, mac):
         """Check if MAC address belongs to Raspberry Pi"""
@@ -55,6 +56,44 @@ class AutoAntenna(plugins.Plugin):
         except:
             pass
         return None
+
+    def _get_mon_parent(self, mon_iface):
+        """Get the parent interface of a monitor interface by matching MAC"""
+        mon_mac = self._get_mac(mon_iface)
+        if not mon_mac:
+            return None
+
+        # Check common interface names
+        for iface in ['wlan0', 'wlan1', 'wlan2']:
+            if self._iface_exists(iface) and self._get_mac(iface) == mon_mac:
+                return iface
+        return None
+
+    def _check_pwnagotchi_config(self, agent):
+        """Check if pwnagotchi is using the expected interface"""
+        try:
+            # Get configured interface from agent
+            config_iface = agent.config().get('main', {}).get('iface', 'wlan0mon')
+
+            # Check if external adapter exists (wlan1)
+            external_exists = self._iface_exists('wlan1')
+
+            # Get parent of the configured monitor interface
+            if 'mon' in config_iface:
+                parent = self._get_mon_parent(config_iface)
+                if parent:
+                    parent_mac = self._get_mac(parent)
+                    is_parent_rpi = self._is_rpi_mac(parent_mac)
+
+                    # Warn if external exists but we're using internal
+                    if external_exists and is_parent_rpi:
+                        self.config_warning = "EXT avail,using INT"
+                        logging.warning(f"[auto-antenna] External adapter (wlan1) available but using internal ({config_iface})")
+                        return
+
+            self.config_warning = None
+        except Exception as e:
+            logging.debug(f"[auto-antenna] Config check failed: {e}")
 
     def _get_band(self):
         """Get current frequency band (2.4/5/6 GHz)"""
@@ -149,9 +188,14 @@ class AutoAntenna(plugins.Plugin):
         ))
 
     def on_ui_update(self, ui):
-        # Show warning if MAC looks wrong
+        # Show warning if MAC looks wrong (highest priority)
         if self.mac_warning:
             ui.set('antenna', self.mac_warning)
+            return
+
+        # Show config warning if external available but not used
+        if self.config_warning:
+            ui.set('antenna', self.config_warning)
             return
 
         label = self.options.get('label', 'A')
@@ -172,6 +216,7 @@ class AutoAntenna(plugins.Plugin):
         interval = self.options.get('check_interval', 5)
         if epoch % interval == 0:
             self._detect_antenna()
+            self._check_pwnagotchi_config(agent)
 
     def on_webhook(self, path, request):
         iface = 'wlan0mon' if self._iface_exists('wlan0mon') else 'wlan0'
